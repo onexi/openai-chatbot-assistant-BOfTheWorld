@@ -1,113 +1,104 @@
-// Load environment variables
-import dotenv from 'dotenv';
-dotenv.config();
-import OpenAI from 'openai';
 import express from 'express';
-import cors from 'cors';
+import fetch from 'node-fetch';
 import bodyParser from 'body-parser';
-// If using Node.js < 18, uncomment the next line
-// const fetch = require('node-fetch');
+import path from 'path';
+import dotenv from 'dotenv';
+import { v4 as uuidv4 } from 'uuid';
 
+dotenv.config();
+
+const __dirname = path.resolve();
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
+
+// In-memory storage for threads (for demo purposes)
+const threads = {};
 
 // Middleware
-app.use(cors());
 app.use(bodyParser.json());
-app.use(express.static('public')); // Serve static files from the 'public' directory
+app.use(express.static(path.join(__dirname, 'public')));
 
-// State dictionary
-let state = {
-  assistant_id: null,
-  assistant_name: null,
-  threadId: null,
-  messages: [],
-};
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
-  });
-// Route to get the list of Assistants
-app.post('/api/assistants', async (req, res) => {
-  let assistant_id = req.body.name;
-    try {
-        let myAssistant = await openai.beta.assistants.retrieve(
-          assistant_id
-        );
-        console.log(myAssistant);
-              // Extract the list of assistants from 'data.data'
-        state.assistant_id = myAssistant.id; // Updated line
-        state.assistant_name = myAssistant.name; // Updated line
-        res.status(200).json(state);
-      }
-      catch{
-        if (!myAssistant.ok) {
-          const errorText = await myAssistant.text;
-          console.error('Error fetching assistants:', errorText);
-          return res.status(myAssistant.status).json({ error: 'Failed to fetch assistants' });
-        }
-      }
-  });
-  
-
-// Route to create a new Thread
-app.post('/api/threads', async (req, res) => {
-  const { assistantId } = req.body;
-  try {
-    let response = await openai.beta.threads.create()
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Error creating thread:', errorText);
-      return res.status(response.status).json({ error: 'Failed to create thread' });
-    }
-
-    const data = await response.json();
-    state.threadId = data.id;
-    state.messages = []; // Reset messages
-    res.json({ threadId: state.threadId });
-  } catch (error) {
-    console.error('Error creating thread:', error);
-    res.status(500).json({ error: 'Failed to create thread' });
-  }
+// Route to serve the main HTML page
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Route to send a message and run the Assistant
-app.post('/api/run', async (req, res) => {
-  const { message } = req.body;
-  state.messages.push({ role: 'user', content: message });
-  try {
-    await openai.beta.threads.messages.create(thread_id,
-        {
-            role: "user",
-            content: message,
-        })
-    // run and poll thread V2 API feature
-    let run = await openai.beta.threads.runs.createAndPoll(thread_id, {
-        assistant_id: state.assistant_id
-    })
-    let run_id = run.id;
-    state.run_id = run_id;
+// API route to handle creating a new thread or continuing an existing one
+app.post('/api/chat', async (req, res) => {
+    const { assistantId, promptMessage, threadId } = req.body;
+    let messages = [];
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error('Error running assistant:', errorText);
-      return res.status(response.status).json({ error: 'Failed to run assistant' });
+    try {
+        if (threadId && threads[threadId]) {
+            // Continue an existing thread
+            messages = threads[threadId]; // Load existing thread messages
+        } else {
+            // Start a new thread
+            const newThreadId = uuidv4(); // Generate a unique thread ID
+            messages = [{ role: 'system', content: 'You are a helpful assistant.' }];
+            threads[newThreadId] = messages; // Store new thread in memory
+            res.locals.threadId = newThreadId; // Pass the new thread ID to the response
+        }
+
+        // Add the user's prompt to the thread if there's a message
+        if (promptMessage) {
+            messages.push({ role: 'user', content: promptMessage });
+        }
+
+        // Send the entire conversation history to OpenAI's API
+        const openAiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: 'gpt-3.5-turbo',  // Use 'gpt-4' if you're using GPT-4
+                messages: messages,      // Send the entire conversation (user, assistant, system)
+            }),
+        });
+
+        const assistantData = await openAiResponse.json();
+        const assistantReply = assistantData.choices[0].message.content;
+
+        // Add assistant's response to the conversation
+        if (assistantReply) {
+            messages.push({ role: 'assistant', content: assistantReply });
+        }
+
+        // Save the updated thread in memory
+        threads[res.locals.threadId || threadId] = messages;
+
+        // Send back the messages along with the thread ID
+        res.json({ messages, threadId: res.locals.threadId || threadId });
+
+    } catch (error) {
+        console.error('Error:', error);
+        res.status(500).json({ error: 'An error occurred while processing your request.' });
     }
-    let messages = await openai.beta.threads.messages.list(thread_id);
-    let all_messages = [];
-    let role = "";
-    let content = "";
-   
-    if (assistantMessage) {
-      state.messages.push(assistantMessage);
+});
+
+// API route to fetch messages for a specific thread
+app.get('/api/chat/threads/:threadId', async (req, res) => {
+    const { threadId } = req.params;
+
+    try {
+        // Fetch the messages for the thread from in-memory storage
+        const threadMessages = threads[threadId];
+
+        if (!threadMessages) {
+            return res.status(404).json({ error: 'Thread not found' });
+        }
+
+        res.json({ messages: threadMessages });
+
+    } catch (error) {
+        console.error('Error fetching thread messages:', error);
+        res.status(500).json({ error: 'Failed to fetch thread messages.' });
     }
-    res.json({ messages: state.messages });
-  } catch (error) {
-    console.error('Error running assistant:', error);
-    res.status(500).json({ error: 'Failed to run assistant' });
-  }
 });
 
 // Start the server
 app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server is running on port ${PORT}`);
 });
