@@ -1,17 +1,18 @@
 let state = {
   assistant_id: null,  // Assistant ID
-  threadId: null,      // Thread ID to be used once a thread is created
+  threadId: null,      // Thread ID for the active thread
   messages: [],        // Array to store messages for the active thread
-  threads: [],         // Array to store previous threads
+  threads: [],         // Array to store previous threads with thread name
 };
 
 // Function to create a new thread
 async function createNewThread() {
     const assistantId = document.getElementById('assistantId').value.trim();
+    const threadName = document.getElementById('threadName').value.trim();  // Get thread name
 
-    // Validate the Assistant ID
-    if (!assistantId) {
-        alert('Please provide an Assistant ID.');
+    // Validate the Assistant ID and thread name
+    if (!assistantId || !threadName) {
+        alert('Please provide both an Assistant ID and a thread name.');
         return;
     }
 
@@ -24,19 +25,22 @@ async function createNewThread() {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ assistantId, promptMessage: "", threadId: null }), // Send empty prompt and no threadId to create a new thread
+            body: JSON.stringify({ assistantId, promptMessage: "", threadId: null }),
         });
 
         const data = await response.json();
         state.threadId = data.threadId;  // Store the newly created thread ID
         state.messages = [];  // Reset messages for the new thread
 
+        // Add the thread name and ID to the threads array
+        state.threads.push({ threadId: state.threadId, threadName });
+
         // Update the previous threads list
-        addThreadToList(state.threadId);
+        addThreadToList(state.threadId, threadName);
 
         // Clear chat box and display system message once
         document.getElementById('chatBox').innerHTML = '';
-        appendMessage('system', `New thread created with ID: ${state.threadId}`);
+        appendMessage('system', `New thread "${threadName}" created with ID: ${state.threadId}`);
 
     } catch (error) {
         console.error('Error:', error);
@@ -44,10 +48,84 @@ async function createNewThread() {
     }
 }
 
+// Function to add a thread to the list on the left
+function addThreadToList(threadId, threadName) {
+    const threadList = document.getElementById('thread-list');
+    const threadElement = document.createElement('div');
+    threadElement.classList.add('thread-item');
+    threadElement.textContent = `Thread: ${threadName}`;
+    threadElement.onclick = function () {
+        loadThread(threadId);  // Fetch and display the selected thread
+    };
+    threadList.appendChild(threadElement);
+}
+
+// Function to load a previous thread when clicked
+async function loadThread(threadId) {
+    console.log(`Loading thread ${threadId}`);
+
+    try {
+        // Fetch the messages for the selected thread from the server
+        const response = await fetch(`/api/chat/threads/${threadId}`, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        });
+
+        const data = await response.json();
+
+        // Clear the chat box and load the messages of the selected thread
+        document.getElementById('chatBox').innerHTML = '';
+        appendMessage('system', `Loaded thread: ${threadId}`);
+
+        // Append each message from the thread to the chat box
+        data.messages.forEach(message => {
+            appendMessage(message.role, message.content);
+        });
+
+        // Update the state with the loaded messages and thread ID
+        state.messages = data.messages;
+        state.threadId = threadId;
+
+        // Set the thread name in the input box for possible updates
+        const thread = state.threads.find(t => t.threadId === threadId);
+        document.getElementById('threadName').value = thread.threadName;
+
+    } catch (error) {
+        console.error('Error:', error);
+        appendMessage('system', 'An error occurred while loading the thread.');
+    }
+}
+
+// Function to update the thread name
+function updateThreadName() {
+    const newThreadName = document.getElementById('threadName').value.trim();
+    
+    // Validate the new thread name
+    if (!newThreadName) {
+        alert('Please enter a new thread name.');
+        return;
+    }
+
+    // Update the thread name in the state
+    const thread = state.threads.find(t => t.threadId === state.threadId);
+    if (thread) {
+        thread.threadName = newThreadName;
+
+        // Update the previous thread list display
+        document.getElementById('thread-list').innerHTML = '';  // Clear and re-render the list
+        state.threads.forEach(t => {
+            addThreadToList(t.threadId, t.threadName);
+        });
+
+        appendMessage('system', `Thread name updated to "${newThreadName}".`);
+    }
+}
+
 // Function to send a user prompt to the existing thread
 async function sendPrompt(event) {
-    // Prevent form submission (including "Enter" key press)
-    if (event) event.preventDefault();
+    if (event) event.preventDefault();  // Prevent page reload
 
     const promptMessage = document.getElementById('promptMessage').value.trim();
 
@@ -84,7 +162,7 @@ async function sendPrompt(event) {
         });
 
         // Update the state with the new messages
-        state.messages = [...state.messages, ...newMessages]; // Merge old and new messages
+        state.messages = [...state.messages, ...newMessages];  // Merge old and new messages
 
     } catch (error) {
         console.error('Error:', error);
@@ -102,57 +180,9 @@ function appendMessage(role, content) {
     chatBox.scrollTop = chatBox.scrollHeight;  // Scroll to the bottom
 }
 
-// Function to add a thread to the list on the left
-function addThreadToList(threadId) {
-    const threadList = document.getElementById('thread-list');
-    const threadElement = document.createElement('div');
-    threadElement.classList.add('thread-item');
-    threadElement.textContent = `Thread ID: ${threadId}`;
-    threadElement.onclick = function () {
-        loadThread(threadId);  // Fetch and display the selected thread
-    };
-    threadList.appendChild(threadElement);
-
-    // Store the thread ID in the state for future reference
-    state.threads.push(threadId);
-}
-
-// Function to load a previous thread when clicked
-async function loadThread(threadId) {
-    console.log(`Loading thread ${threadId}`);
-
-    try {
-        // Fetch the messages for the selected thread from the server
-        const response = await fetch(`/api/chat/threads/${threadId}`, {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json',
-            }
-        });
-
-        const data = await response.json();
-
-        // Clear the chat box and load the messages of the selected thread
-        document.getElementById('chatBox').innerHTML = '';
-        appendMessage('system', `Loaded thread: ${threadId}`);
-
-        // Append each message from the thread to the chat box
-        data.messages.forEach(message => {
-            appendMessage(message.role, message.content);
-        });
-
-        // Update the state with the loaded messages and thread ID
-        state.messages = data.messages;
-        state.threadId = threadId;
-
-    } catch (error) {
-        console.error('Error:', error);
-        appendMessage('system', 'An error occurred while loading the thread.');
-    }
-}
-
 // Event listeners for buttons and forms
 document.getElementById('createThreadButton').addEventListener('click', createNewThread);
+document.getElementById('updateThreadNameButton').addEventListener('click', updateThreadName);
 document.getElementById('promptForm').addEventListener('submit', sendPrompt);
 
 // Capture the Enter keypress on the input field and submit the form without page reload
@@ -162,3 +192,4 @@ document.getElementById('promptMessage').addEventListener('keypress', function (
         sendPrompt(event);  // Call sendPrompt manually
     }
 });
+
