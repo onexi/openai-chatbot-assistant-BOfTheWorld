@@ -2,4 +2,4 @@
 # PS03OpenAIAssistantChatBot
 ### create a .env file and put in your OPENAI_API_KEY
 
-# Use Assistant asst_bXH8Svk5TV5gSROL5vUlQQNd
+# Use Assistant asst_bXH8Svk5TV5gSROL5vUlQQNd or you may use your own Assistant. Make sure to create .env file in the root directory
